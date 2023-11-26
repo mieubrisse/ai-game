@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/mieubrisse/ai-game/resources"
+	"github.com/yohamta/donburi"
+	"github.com/yohamta/donburi/ecs"
+	"github.com/yohamta/donburi/filter"
 	"image"
+	_ "image/png"
 )
 
 const (
@@ -32,41 +36,77 @@ func init() {
 }
 
 type Game struct {
-	entities []*Entity
+	ecs *ecs.ECS
 }
 
 func NewGame() *Game {
-	player := &Entity{
-		getDesiredDirection: func(self *Entity) (dX, dY int) {
-			return getPlayerDesiredDirection()
-		},
-		slowness: playerSlowness,
+	world := donburi.NewWorld()
+
+	playerEntity := world.Create(Mob, PlayerTag)
+	playerEntry := world.Entry(playerEntity)
+	playerData := Mob.Get(playerEntry)
+	playerData.locationX = 10
+	playerData.locationY = 10
+	playerData.facingX = 1
+	playerData.slowness = playerSlowness
+	playerData.getDesiredDirection = func(world donburi.World, self *donburi.Entry) (dX, dY int) {
+		return getPlayerDesiredDirection()
 	}
-	entities := []*Entity{
-		player,
-		{
-			slowness: enemySlowness,
-			getDesiredDirection: func(self *Entity) (dX, dY int) {
-				return huntTargetEntity(self, player)
-			},
-		},
+
+	enemyId := world.Create(Mob)
+	enemyEntry := world.Entry(enemyId)
+	enemyData := Mob.Get(enemyEntry)
+	enemyData.locationX = 0
+	enemyData.locationY = 0
+	enemyData.facingX = 1
+	enemyData.slowness = enemySlowness
+	enemyData.getDesiredDirection = func(world donburi.World, self *donburi.Entry) (dX, dY int) {
+		return huntTargetEntity(self, playerEntry)
 	}
+
+	gameEcs := ecs.NewECS(world).
+		AddSystem(AnimateActors)
+
 	return &Game{
-		entities: entities,
+		ecs: gameEcs,
 	}
 }
 
 func (g *Game) Update() error {
-	for _, entity := range g.entities {
-		entity.Update()
-	}
+	g.ecs.Update()
 	return nil
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
-	for _, entity := range g.entities {
-		entity.Draw(screen)
-	}
+	query := donburi.NewQuery(filter.Contains(Mob))
+	query.Each(g.ecs.World, func(entry *donburi.Entry) {
+		mobData := Mob.Get(entry)
+
+		// If the player is on the move, they'll be in progress to their destination so we need
+		// to prepare to translate the sprite appropriately
+		playerImage := mageImage
+		var onTheMoveXOffsetPixels, onTheMoveYOffsetPixels float64
+		if IsMobOnTheMove(mobData) {
+			progressPercentage := float64(mobData.completedTicks) / float64(mobData.requiredTicks)
+			pixelOffset := float64(PixelsPerCellSide) * progressPercentage
+			onTheMoveXOffsetPixels = float64(mobData.destinationX-mobData.locationX) * pixelOffset
+			onTheMoveYOffsetPixels = float64(mobData.destinationY-mobData.locationY) * pixelOffset
+
+			if (progressPercentage >= 0.25 && progressPercentage < 0.50) || progressPercentage >= 0.75 {
+				playerImage = mage2Image
+			}
+		}
+
+		drawImageOptions := &ebiten.DrawImageOptions{}
+		drawImageOptions.GeoM.Translate(
+			float64(mobData.locationX*PixelsPerCellSide)+onTheMoveXOffsetPixels,
+			float64(mobData.locationY*PixelsPerCellSide)+onTheMoveYOffsetPixels,
+		)
+
+		// text.Draw()
+
+		screen.DrawImage(playerImage, drawImageOptions)
+	})
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
@@ -97,17 +137,20 @@ func loadImage(imageBytes []byte) *ebiten.Image {
 	return ebiten.NewImageFromImage(img)
 }
 
-func huntTargetEntity(self *Entity, target *Entity) (dX, dY int) {
-	if target.locationX > self.locationX {
+func huntTargetEntity(self, target *donburi.Entry) (dX, dY int) {
+	selfMobData := Mob.Get(self)
+	targetMobData := Mob.Get(target)
+
+	if targetMobData.locationX > selfMobData.locationX {
 		return 1, 0
 	}
-	if target.locationY > self.locationY {
+	if targetMobData.locationY > selfMobData.locationY {
 		return 0, 1
 	}
-	if target.locationX < self.locationX {
+	if targetMobData.locationX < selfMobData.locationX {
 		return -1, 0
 	}
-	if target.locationY < self.locationY {
+	if targetMobData.locationY < selfMobData.locationY {
 		return 0, -1
 	}
 	return 0, 0
