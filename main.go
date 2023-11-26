@@ -16,7 +16,7 @@ func main() {
 	)
 	ebiten.SetWindowTitle("AI game")
 
-	if err := ebiten.RunGame(&game.Game{}); err != nil {
+	if err := ebiten.RunGame(game.NewGame()); err != nil {
 		log.Fatal(err)
 	}
 }
